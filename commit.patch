@@ -1,0 +1,189 @@
+diff --git a/Makefile b/Makefile
+index b971308..f40ac6f 100644
+--- a/Makefile
++++ b/Makefile
+@@ -157,7 +157,9 @@ UPROGS=\
+ 	$U/_grind\
+ 	$U/_wc\
+ 	$U/_zombie\
+-
++	$U/_sleep\
++	$U/_pingpong\
++	$U/_find\
+ 
+ ifeq ($(LAB),syscall)
+ UPROGS += \
+@@ -242,15 +244,8 @@ qemu-gdb: $K/kernel .gdbinit fs.img
+ 	@echo "*** Now run 'gdb' in another window." 1>&2
+ 	$(QEMU) $(QEMUOPTS) -S $(QEMUGDB)
+ 
+-GDBARGS = 
+-GDBARGS += -ex 'set architecture riscv:rv64'
+-GDBARGS += -ex 'target remote 127.0.0.1:$(GDBPORT)'
+-GDBARGS += -ex 'symbol-file kernel/kernel'
+-GDBARGS += -ex 'set riscv use-compressed-breakpoints yes'
+-
+-
+ gdb: 
+-	$(GDB) $(GDBARGS)
++	$(GDB)
+ 
+ ##
+ ##  FOR testing lab grading script
+diff --git a/commands.gdb b/commands.gdb
+new file mode 100644
+index 0000000..429e390
+--- /dev/null
++++ b/commands.gdb
+@@ -0,0 +1,7 @@
++b usertrapret
++c
++p cpus[$tp]->proc->name
++c
++p cpus[$tp]->proc->name
++da
++
+diff --git a/user/find.c b/user/find.c
+new file mode 100644
+index 0000000..ee67b3a
+--- /dev/null
++++ b/user/find.c
+@@ -0,0 +1,68 @@
++#include "kernel/types.h"
++#include "kernel/stat.h"
++#include "kernel/fs.h"
++#include "user.h"
++
++// 返回path中最后一个元素的指针
++char* last(char *path) {
++  char *res = path;
++  for (char *p = path; *p; p++) {
++    if (*p == '/') res = p + 1;
++  }
++  return res;
++}
++
++// 在path目录下递归查找名字为target的文件
++void dofind(char *path, char *target) {
++  int fd;
++  struct stat st;
++
++  if ((fd = open((char*)path, 0)) < 0) {
++    printf("find: cannot open %s\n", path);
++    return;
++  }
++  if (fstat(fd, &st) < 0) {
++    printf("find: cannot stat %s\n", path);
++    close(fd);
++    return;
++  }
++
++  if (strcmp(last(path), target) == 0) {
++    printf("%s\n", path);
++  }
++
++  if (st.type == T_DIR) {
++    char buf[512], *p;
++    if (strlen(path) + 1 + DIRSIZ + 1 > sizeof(buf)) {
++      printf("find: path too long\n");
++      close(fd);
++      return;
++    }
++
++    strcpy(buf, path);
++    p = buf + strlen(buf);
++    if (*(p - 1) != '/') *p++ = '/'; // 添加路径分隔符
++
++    struct dirent de;
++    while (read(fd, &de, sizeof(de)) == sizeof(de)) {
++      if (de.inum == 0) continue;
++      if (strcmp(de.name, ".") == 0 || strcmp(de.name, "..") == 0) continue;
++
++      memmove(p, de.name, DIRSIZ);
++      p[DIRSIZ] = 0;
++      dofind(buf, target);
++    }
++  }
++
++  close(fd);
++}
++
++int main(int argc, char *argv[]) {
++  if (argc != 3) {
++    printf("Usage: find <path> <name>\n");
++    exit(1);
++  }
++  dofind(argv[1], argv[2]);
++  exit(0);
++}
++
+diff --git a/user/pingpong.c b/user/pingpong.c
+new file mode 100644
+index 0000000..b3f2ea2
+--- /dev/null
++++ b/user/pingpong.c
+@@ -0,0 +1,45 @@
++#include "kernel/types.h"
++#include "user.h"
++
++int main(int argc, char *argv[]) {
++  int c2f[2];
++  int f2c[2];
++
++  pipe(c2f);
++  pipe(f2c);
++
++  int ppid = getpid();
++  int pid = fork();
++
++  if (pid == 0) {
++    // 子进程不用f2c的写端和c2f的读端
++    close(f2c[1]);
++    close(c2f[0]);
++
++    int from_parent;
++    read(f2c[0], &from_parent, sizeof(from_parent));
++    int self = getpid();
++    printf("%d: received ping from pid %d\n", self, from_parent);
++
++    write(c2f[1], &self, sizeof(self));
++
++    close(f2c[0]);
++    close(c2f[1]);
++    exit(0);
++  } else {
++    // 父进程不用f2c的读端和c2f的写端
++    close(f2c[0]);
++    close(c2f[1]);
++
++    write(f2c[1], &ppid, sizeof(ppid));
++
++    int from_child;
++    read(c2f[0], &from_child, sizeof(from_child));
++    printf("%d: received pong from pid %d\n", ppid, from_child);
++
++    close(f2c[1]);
++    close(c2f[0]);
++    wait(0);
++    exit(0);
++  }
++}
+diff --git a/user/sleep.c b/user/sleep.c
+new file mode 100644
+index 0000000..bf8cef0
+--- /dev/null
++++ b/user/sleep.c
+@@ -0,0 +1,13 @@
++#include "kernel/types.h"
++#include "user.h"
++
++int main(int argc,char* argv[]){
++    if(argc != 2){
++        printf("Sleep needs one argument!\n"); //检查参数数量是否正确
++        exit(-1);
++    }
++    int ticks = atoi(argv[1]); //将字符串参数转为整数
++    sleep(ticks);              //使用系统调用sleep
++    printf("(nothing happens for a little while)\n");
++    exit(0); //确保进程退出
++}
