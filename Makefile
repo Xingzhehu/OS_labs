@@ -164,6 +164,7 @@ UPROGS=\
 	$U/_zombie\
 	$U/_waittest\
 	$U/_exittest\
+	$U/_yieldtest\
 
 
 ifeq ($(LAB),trap)
@@ -243,14 +244,8 @@ qemu-gdb: $K/kernel .gdbinit fs.img
 	@echo "*** Now run 'gdb' in another window." 1>&2
 	$(QEMU) $(QEMUOPTS) -S $(QEMUGDB)
 
-GDBARGS = 
-GDBARGS += -ex 'set architecture riscv:rv64'
-GDBARGS += -ex 'target remote 127.0.0.1:$(GDBPORT)'
-GDBARGS += -ex 'symbol-file kernel/kernel'
-GDBARGS += -ex 'set riscv use-compressed-breakpoints yes'
-
 gdb: 
-	$(GDB) $(GDBARGS)
+	$(GDB)
 
 ##
 ##  FOR testing lab grading script

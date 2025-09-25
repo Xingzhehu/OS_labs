@@ -6,6 +6,11 @@
 #include "proc.h"
 #include "defs.h"
 
+// 定义一个全局数组来存储进程状态的字符串表示
+static char *states[] = {
+    [UNUSED] "unused", [SLEEPING] "sleep ", [RUNNABLE] "runble", [RUNNING] "run   ", [ZOMBIE] "zombie"
+};
+
 struct cpu cpus[NCPU];
 
 struct proc proc[NPROC];
@@ -299,7 +304,20 @@ void exit(int status) {
 
   if (p == initproc) panic("init exiting");
 
-  // Close all open files.
+  // 打印当前进程的父进程信息
+  acquire(&p->lock); // 获取当前进程的锁
+  if (p->parent) {
+    acquire(&p->parent->lock);  // 获取父进程的锁
+    exit_info("proc %d exit, parent pid %d, name %s, state %s\n", 
+               p->pid, 
+               p->parent->pid, 
+               p->parent->name,
+               states[p->parent->state]); // 使用数组访问以避免潜在的panic
+    release(&p->parent->lock);  // 释放父进程的锁
+  }
+  release(&p->lock); // 释放当前进程锁
+
+  // 关闭所有打开的文件
   for (int fd = 0; fd < NOFILE; fd++) {
     if (p->ofile[fd]) {
       struct file *f = p->ofile[fd];
@@ -308,55 +326,51 @@ void exit(int status) {
     }
   }
 
-  begin_op();
-  iput(p->cwd);
-  end_op();
-  p->cwd = 0;
+    // 打印子进程信息
+    int index = 0;
+  for (struct proc *pp = proc; pp < &proc[NPROC]; pp++) {
+    if (pp->parent == p) { // 查找当前进程的子进程
+      acquire(&pp->lock);
+      exit_info("proc %d exit, child %d, pid %d, name %s, state %s\n", 
+                 p->pid,
+                 index,
+                 pp->pid, 
+                 pp->name,
+                 states[pp->state]);
+      release(&pp->lock);
+      index += 1;
+    }
+  }
 
-  // we might re-parent a child to init. we can't be precise about
-  // waking up init, since we can't acquire its lock once we've
-  // acquired any other proc lock. so wake up init whether that's
-  // necessary or not. init may miss this wakeup, but that seems
-  // harmless.
+  // 继续 exit 的处理流程
   acquire(&initproc->lock);
   wakeup1(initproc);
   release(&initproc->lock);
 
-  // grab a copy of p->parent, to ensure that we unlock the same
-  // parent we locked. in case our parent gives us away to init while
-  // we're waiting for the parent lock. we may then race with an
-  // exiting parent, but the result will be a harmless spurious wakeup
-  // to a dead or wrong process; proc structs are never re-allocated
-  // as anything else.
   acquire(&p->lock);
   struct proc *original_parent = p->parent;
   release(&p->lock);
 
-  // we need the parent's lock in order to wake it up from wait().
-  // the parent-then-child rule says we have to lock it first.
   acquire(&original_parent->lock);
-
   acquire(&p->lock);
 
-  // Give any children to init.
+  // 将所有子进程交给 init
   reparent(p);
 
-  // Parent might be sleeping in wait().
   wakeup1(original_parent);
 
   p->xstate = status;
   p->state = ZOMBIE;
 
   release(&original_parent->lock);
-
-  // Jump into the scheduler, never to return.
   sched();
   panic("zombie exit");
 }
 
+
 // Wait for a child process to exit and return its pid.
 // Return -1 if this process has no children.
-int wait(uint64 addr) {
+int wait(uint64 addr, int flags) {
   struct proc *np;
   int havekids, pid;
   struct proc *p = myproc();
@@ -400,8 +414,13 @@ int wait(uint64 addr) {
       return -1;
     }
 
-    // Wait for a child to exit.
-    sleep(p, &p->lock);  // DOC: wait-sleep
+    // 根据 flags 决定是否阻塞等待
+    if (flags == 0) {
+      sleep(p, &p->lock);  // 阻塞等待
+    } else {
+      release(&p->lock);    // 释放锁，非阻塞
+      return -1;            // 或者返回一个特殊的值，表示没有子进程退出
+    }
   }
 }
 
