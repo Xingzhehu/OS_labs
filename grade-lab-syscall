@@ -50,12 +50,13 @@ def test_yield_test():
 
     match = re.search(r'Next runnable process pid is (\d+) and user pc is (0x[0-9a-fA-F]+)', r.qemu.output, re.MULTILINE)
     assert match is not None, "can't find this sentence: Next runnable process pid is (\\d+) and user pc is (0x[0-9a-fA-F]+)"
-    pid = match.group(1)  
-    sepc = match.group(2)  
+    pid = match.group(1)
+    sepc = match.group(2)
     matches = re.findall("Next runnable process pid is \\w+ and user pc is \\w+", r.qemu.output, re.MULTILINE)
     result = subprocess.run([f"{toolprefix}addr2line", sepc, "-f", "-s", "-e", "user/_yieldtest"], stdout=subprocess.PIPE, check=True)
     out = result.stdout.decode("utf-8")
     assert_equal(out[:5], "fork\n")
+    assert_equal(out[5:],"usys.S:7\n")
     r.match(f".*?Child with PID {pid} begins to run")
     r.match(".*?Child with PID 5 begins to run")
     r.match(".*?Child with PID 6 begins to run")
@@ -63,6 +64,4 @@ def test_yield_test():
 
 
 run_tests()
-
-
 
